@@ -72,9 +72,9 @@ public class CrashReportDialog extends BaseCrashReportDialog implements DialogIn
             }
         } else {
             dialogBuilder.setView(buildCustomView(savedInstanceState));
+            dialogBuilder.setPositiveButton(getText(ACRA.getConfig().resDialogPositiveButtonText()), CrashReportDialog.this);
+            dialogBuilder.setNegativeButton(getText(ACRA.getConfig().resDialogNegativeButtonText()), CrashReportDialog.this);
         }
-        dialogBuilder.setPositiveButton(getText(ACRA.getConfig().resDialogPositiveButtonText()), CrashReportDialog.this);
-        dialogBuilder.setNegativeButton(getText(ACRA.getConfig().resDialogNegativeButtonText()), CrashReportDialog.this);
 
         mDialog = dialogBuilder.create();
         mDialog.setCanceledOnTouchOutside(false);

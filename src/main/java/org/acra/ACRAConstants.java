@@ -21,7 +21,6 @@ import static org.acra.ReportField.*;
 
 /**
  * Responsible for collating those constants shared among the ACRA components.
- * <p/>
  * 
  * @author William Ferguson
  * @since 4.3.0
@@ -46,12 +45,20 @@ public final class ACRAConstants {
      * The number of reports is limited to avoid ANR on application start.
      */
     static final int MAX_SEND_REPORTS = 5;
+
     /**
      * Used in the intent starting CrashReportDialog to provide the name of the
      * latest generated report file in order to be able to associate the user
      * comment.
      */
-    protected static final String EXTRA_REPORT_FILE_NAME = "REPORT_FILE_NAME";
+    public static final String EXTRA_REPORT_FILE_NAME = "REPORT_FILE_NAME";
+    /**
+     * Used in the intent starting CrashReportDialog to provide the Exception that caused the crash.
+     *
+     * This can be used by any BaseCrashReportDialog subclass to custom the dialog.
+     */
+    public static final String EXTRA_REPORT_EXCEPTION = "REPORT_EXCEPTION";
+
     /**
      * Set this extra to true to force the deletion of reports by the
      * {@link CrashReportDialog} activity.
@@ -65,7 +72,7 @@ public final class ACRAConstants {
     /**
      * Number of milliseconds to wait after displaying a toast.
      */
-    static final int TOAST_WAIT_DURATION = 3000;
+    static final int TOAST_WAIT_DURATION = 2000;
 
     /**
      * A special String value to allow the usage of a pseudo-null default value
@@ -111,13 +118,15 @@ public final class ACRAConstants {
 
     public static final boolean DEFAULT_SEND_REPORTS_IN_DEV_MODE = true;
 
+    public static final boolean DEFAULT_SEND_REPORTS_AT_SHUTDOWN = true;
+
     public static final String DEFAULT_APPLICATION_LOGFILE = DEFAULT_STRING_VALUE;
 
     public static final int DEFAULT_APPLICATION_LOGFILE_LINES = DEFAULT_LOGCAT_LINES;
 
-    public static final String DEFAULT_GOOGLE_FORM_URL_FORMAT = "https://docs.google.com/spreadsheet/formResponse?formkey=%s&ifq";
-
     public static final boolean DEFAULT_DISABLE_SSL_CERT_VALIDATION = false;
+
+    public static final String DEFAULT_HTTP_SOCKET_FACTORY_FACTORY_CLASS = "org.acra.util.DefaultHttpsSocketFactoryFactory";
 
     /**
      * Default list of {@link ReportField}s to be sent in email reports. You can
@@ -140,4 +149,6 @@ public final class ACRAConstants {
             DISPLAY, USER_COMMENT, USER_EMAIL, USER_APP_START_DATE, USER_CRASH_DATE, DUMPSYS_MEMINFO, LOGCAT,
             INSTALLATION_ID, DEVICE_FEATURES, ENVIRONMENT, SHARED_PREFERENCES, SETTINGS_SYSTEM, SETTINGS_SECURE,
             SETTINGS_GLOBAL };
+
+    public static final String DATE_TIME_FORMAT_STRING = "yyyy-MM-dd'T'HH:mm:ss.SSSZZZZZ";
 }

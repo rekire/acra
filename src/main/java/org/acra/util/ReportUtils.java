@@ -4,16 +4,21 @@ import java.io.File;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
 import java.net.SocketException;
+import java.text.SimpleDateFormat;
 import java.util.Enumeration;
+import java.util.Locale;
 
 import org.acra.ACRA;
+import org.acra.ACRAConstants;
 
 import android.content.Context;
 import android.os.Environment;
 import android.os.StatFs;
 import android.telephony.TelephonyManager;
-import android.util.Log;
+import android.text.format.Time;
 import android.util.SparseArray;
+
+import static org.acra.ACRA.LOG_TAG;
 
 /**
  * Responsible for providing base utilities used when constructing the report.
@@ -62,7 +67,7 @@ public final class ReportUtils {
             final TelephonyManager tm = (TelephonyManager) context.getSystemService(Context.TELEPHONY_SERVICE);
             return tm.getDeviceId();
         } catch (RuntimeException e) {
-            Log.w(ACRA.LOG_TAG, "Couldn't retrieve DeviceId for : " + context.getPackageName(), e);
+            ACRA.log.w(LOG_TAG, "Couldn't retrieve DeviceId for : " + context.getPackageName(), e);
             return null;
         }
     }
@@ -73,7 +78,7 @@ public final class ReportUtils {
             return filesDir.getAbsolutePath();
         }
 
-        Log.w(ACRA.LOG_TAG, "Couldn't retrieve ApplicationFilePath for : " + context.getPackageName());
+        ACRA.log.w(LOG_TAG, "Couldn't retrieve ApplicationFilePath for : " + context.getPackageName());
         return "Couldn't retrieve ApplicationFilePath";
     }
     
@@ -123,8 +128,14 @@ public final class ReportUtils {
                 }
             }
         } catch (SocketException ex) {
-            ACRA.log.w(ACRA.LOG_TAG, ex.toString());
+            ACRA.log.w(LOG_TAG, ex.toString());
         }
         return result.toString();
+    }
+
+    public static String getTimeString(Time time)
+    {
+        SimpleDateFormat format = new SimpleDateFormat(ACRAConstants.DATE_TIME_FORMAT_STRING, Locale.ENGLISH);
+        return format.format(time.toMillis(true));
     }
 }

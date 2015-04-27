@@ -19,12 +19,10 @@ package org.acra.collector;
 import static org.acra.ACRA.LOG_TAG;
 import static org.acra.ReportField.*;
 
-import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.io.Writer;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -32,9 +30,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import org.acra.ACRA;
-import org.acra.ACRAConstants;
 import org.acra.ReportField;
-import org.acra.annotation.ReportsCrashes;
 import org.acra.util.Installation;
 import org.acra.util.PackageManagerWrapper;
 import org.acra.util.ReportUtils;
@@ -45,14 +41,13 @@ import android.content.SharedPreferences;
 import android.content.pm.PackageInfo;
 import android.os.Environment;
 import android.text.format.Time;
-import android.util.Log;
 
 /**
  * Responsible for creating the CrashReportData for an Exception.
  * <p>
  * Also responsible for holding the custom data to send with each report.
  * </p>
- * 
+ *
  * @author William Ferguson
  * @since 4.3.0
  */
@@ -65,7 +60,7 @@ public final class CrashReportDataFactory {
     private final String initialConfiguration;
 
     public CrashReportDataFactory(Context context, SharedPreferences prefs, Time appStartDate,
-            String initialConfiguration) {
+                                  String initialConfiguration) {
         this.context = context;
         this.prefs = prefs;
         this.appStartDate = appStartDate;
@@ -81,7 +76,7 @@ public final class CrashReportDataFactory {
      * The key/value pairs will be stored in the "custom" column, as a text
      * containing one 'key = value' pair on each line.
      * </p>
-     * 
+     *
      * @param key
      *            A key for your custom data.
      * @param value
@@ -94,7 +89,7 @@ public final class CrashReportDataFactory {
 
     /**
      * Removes a key/value pair from the custom data field.
-     * 
+     *
      * @param key
      *            The key of the data to be removed.
      * @return The value for this key before removal.
@@ -102,7 +97,7 @@ public final class CrashReportDataFactory {
     public String removeCustomData(String key) {
         return customParameters.remove(key);
     }
-    
+
     /**
      * Removes all key/value pairs from the custom data field.
      */
@@ -112,7 +107,7 @@ public final class CrashReportDataFactory {
 
     /**
      * Gets the current value for a key in the custom data field.
-     * 
+     *
      * @param key
      *            The key of the data to be retrieved.
      * @return The value for this key.
@@ -123,30 +118,39 @@ public final class CrashReportDataFactory {
 
     /**
      * Collects crash data.
-     * 
+     *
+     * @param msg
+     *            A message to be associated with the crash report.
      * @param th
      *            Throwable that caused the crash.
+     * @param customData
+     *            Custom key/value pairs to be associated with the crash report.
      * @param isSilentReport
      *            Whether to report this report as being sent silently.
      * @param brokenThread  Thread on which the error occurred.
      * @return CrashReportData representing the current state of the application
      *         at the instant of the Exception.
      */
-    public CrashReportData createCrashData(Throwable th, boolean isSilentReport, Thread brokenThread) {
+    public CrashReportData createCrashData(String msg, Throwable th, Map<String, String> customData, boolean isSilentReport, Thread brokenThread) {
         final CrashReportData crashReportData = new CrashReportData();
         try {
-            final List<ReportField> crashReportFields = getReportFields();
+            final List<ReportField> crashReportFields = ACRA.getConfig().getReportFields();
 
             // Make every entry here bullet proof and move any slightly dodgy
             // ones to the end.
             // This ensures that we collect as much info as possible before
             // something crashes the collection process.
 
-            crashReportData.put(STACK_TRACE, getStackTrace(th));
-            crashReportData.put(ReportField.USER_APP_START_DATE, appStartDate.format3339(false));
+            crashReportData.put(STACK_TRACE, getStackTrace(msg, th));
+            crashReportData.put(ReportField.USER_APP_START_DATE, ReportUtils.getTimeString(appStartDate));
 
             if (isSilentReport) {
                 crashReportData.put(IS_SILENT, "true");
+            }
+
+            // StackTrace hash
+            if (crashReportFields.contains(STACK_TRACE_HASH)) {
+                crashReportData.put(ReportField.STACK_TRACE_HASH, getStackTraceHash(th));
             }
 
             // Generate report uuid
@@ -221,21 +225,20 @@ public final class CrashReportDataFactory {
             if (crashReportFields.contains(USER_CRASH_DATE)) {
                 final Time curDate = new Time();
                 curDate.setToNow();
-                crashReportData.put(USER_CRASH_DATE, curDate.format3339(false));
+                crashReportData.put(USER_CRASH_DATE, ReportUtils.getTimeString(curDate));
             }
 
             // Add custom info, they are all stored in a single field
             if (crashReportFields.contains(CUSTOM_DATA)) {
-                crashReportData.put(CUSTOM_DATA, createCustomInfoString());
+                crashReportData.put(CUSTOM_DATA, createCustomInfoString(customData));
             }
 
             if (crashReportFields.contains(BUILD_CONFIG)) {
-                final String className = context.getPackageName() + ".BuildConfig";
                 try {
-                    final Class<?> buildConfig = Class.forName(className);
-                    crashReportData.put(BUILD_CONFIG, ReflectionCollector.collectConstants(buildConfig));
+                    final Class buildConfigClass = getBuildConfigClass();
+                    crashReportData.put(BUILD_CONFIG, ReflectionCollector.collectConstants(buildConfigClass));
                 } catch (ClassNotFoundException e) {
-                    Log.e(ACRA.LOG_TAG, "Not adding buildConfig to log. Class Not found : " + className);
+                    // We have already logged this when we had the name of the class that wasn't found.
                 }
             }
 
@@ -294,7 +297,7 @@ public final class CrashReportDataFactory {
 
             // Retrieve UDID(IMEI) if permission is available
             if (crashReportFields.contains(DEVICE_ID) && prefs.getBoolean(ACRA.PREF_ENABLE_DEVICE_ID, true)
-                    && pm.hasPermission(Manifest.permission.READ_PHONE_STATE)) {
+                && pm.hasPermission(Manifest.permission.READ_PHONE_STATE)) {
                 final String deviceId = ReportUtils.getDeviceId(context);
                 if (deviceId != null) {
                     crashReportData.put(DEVICE_ID, deviceId);
@@ -305,10 +308,9 @@ public final class CrashReportDataFactory {
             // Before JellyBean, this required the READ_LOGS permission
             // Since JellyBean, READ_LOGS is not granted to third-party apps anymore for security reasons.
             // Though, we can call logcat without any permission and still get traces related to our app.
-            if (prefs.getBoolean(ACRA.PREF_ENABLE_SYSTEM_LOGS, true)
-            		&& (pm.hasPermission(Manifest.permission.READ_LOGS))
-            			|| Compatibility.getAPILevel() >= 16) {
-                Log.i(ACRA.LOG_TAG, "READ_LOGS granted! ACRA can include LogCat and DropBox data.");
+            final boolean hasReadLogsPermission = pm.hasPermission(Manifest.permission.READ_LOGS) || (Compatibility.getAPILevel() >= 16);
+            if (prefs.getBoolean(ACRA.PREF_ENABLE_SYSTEM_LOGS, true) && hasReadLogsPermission) {
+                ACRA.log.i(LOG_TAG, "READ_LOGS granted! ACRA can include LogCat and DropBox data.");
                 if (crashReportFields.contains(LOGCAT)) {
                     crashReportData.put(LOGCAT, LogCatCollector.collectLogCat(null));
                 }
@@ -320,16 +322,22 @@ public final class CrashReportDataFactory {
                 }
                 if (crashReportFields.contains(DROPBOX)) {
                     crashReportData.put(DROPBOX,
-                            DropBoxCollector.read(context, ACRA.getConfig().additionalDropBoxTags()));
+                                        DropBoxCollector.read(context, ACRA.getConfig().additionalDropBoxTags()));
                 }
             } else {
-                Log.i(ACRA.LOG_TAG, "READ_LOGS not allowed. ACRA will not include LogCat and DropBox data.");
+                ACRA.log.i(LOG_TAG, "READ_LOGS not allowed. ACRA will not include LogCat and DropBox data.");
             }
 
             // Application specific log file
             if (crashReportFields.contains(APPLICATION_LOG)) {
-                crashReportData.put(APPLICATION_LOG, LogFileCollector.collectLogFile(context, ACRA.getConfig()
-                        .applicationLogFile(), ACRA.getConfig().applicationLogFileLines()));
+                try {
+                    final String logFile = LogFileCollector.collectLogFile(context,
+                                                                           ACRA.getConfig().applicationLogFile(),
+                                                                           ACRA.getConfig().applicationLogFileLines());
+                    crashReportData.put(APPLICATION_LOG, logFile);
+                } catch (IOException e) {
+                    ACRA.log.e(LOG_TAG, "Error while reading application log file " + ACRA.getConfig().applicationLogFile(), e);
+                }
             }
 
             // Media Codecs list
@@ -348,11 +356,7 @@ public final class CrashReportDataFactory {
             }
 
         } catch (RuntimeException e) {
-            Log.e(LOG_TAG, "Error while retrieving crash data", e);
-        } catch (FileNotFoundException e) {
-            Log.e(LOG_TAG, "Error : application log file " + ACRA.getConfig().applicationLogFile() + " not found.", e);
-        } catch (IOException e) {
-            Log.e(LOG_TAG, "Error while reading application log file " + ACRA.getConfig().applicationLogFile() + ".", e);
+            ACRA.log.e(LOG_TAG, "Error while retrieving crash data", e);
         }
 
         return crashReportData;
@@ -361,13 +365,20 @@ public final class CrashReportDataFactory {
     /**
      * Generates the string which is posted in the single custom data field in
      * the GoogleDocs Form.
-     * 
+     *
      * @return A string with a 'key = value' pair on each line.
      */
-    private String createCustomInfoString() {
+    private String createCustomInfoString(Map<String, String> reportCustomData) {
+        Map<String, String> params = customParameters;
+
+        if (reportCustomData != null) {
+            params = new HashMap<String, String>(params);
+            params.putAll(reportCustomData);
+        }
+
         final StringBuilder customInfo = new StringBuilder();
-        for (final String currentKey : customParameters.keySet()) {
-            String currentVal = customParameters.get(currentKey);
+        for (final String currentKey : params.keySet()) {
+            String currentVal = params.get(currentKey);
             customInfo.append(currentKey);
             customInfo.append(" = ");
             // We need to escape new lines in values or they are transformed into new
@@ -381,10 +392,12 @@ public final class CrashReportDataFactory {
         return customInfo.toString();
     }
 
-    private String getStackTrace(Throwable th) {
-
+    private String getStackTrace(String msg, Throwable th) {
         final Writer result = new StringWriter();
         final PrintWriter printWriter = new PrintWriter(result);
+
+        if (msg != null && !msg.isEmpty())
+            printWriter.println(msg);
 
         // If the exception was thrown in a background thread inside
         // AsyncTask, then the actual exception can be found with getCause
@@ -399,21 +412,35 @@ public final class CrashReportDataFactory {
         return stacktraceAsString;
     }
 
-    private List<ReportField> getReportFields() {
-        final ReportsCrashes config = ACRA.getConfig();
-        final ReportField[] customReportFields = config.customReportContent();
-
-        final ReportField[] fieldsList;
-        if (customReportFields.length != 0) {
-            Log.d(LOG_TAG, "Using custom Report Fields");
-            fieldsList = customReportFields;
-        } else if (config.mailTo() == null || "".equals(config.mailTo())) {
-            Log.d(LOG_TAG, "Using default Report Fields");
-            fieldsList = ACRAConstants.DEFAULT_REPORT_FIELDS;
-        } else {
-            Log.d(LOG_TAG, "Using default Mail Report Fields");
-            fieldsList = ACRAConstants.DEFAULT_MAIL_REPORT_FIELDS;
+    private String getStackTraceHash(Throwable th) {
+        final StringBuilder res = new StringBuilder();
+        Throwable cause = th;
+        while (cause != null) {
+            final StackTraceElement[] stackTraceElements = cause.getStackTrace();
+            for (final StackTraceElement e : stackTraceElements) {
+                res.append(e.getClassName());
+                res.append(e.getMethodName());
+            }
+            cause = cause.getCause();
         }
-        return Arrays.asList(fieldsList);
+
+        return Integer.toHexString(res.toString().hashCode());
+    }
+
+    private Class<?> getBuildConfigClass() throws ClassNotFoundException {
+        final Class configuredBuildConfig = ACRA.getConfig().buildConfigClass();
+        if ((configuredBuildConfig != null) && !configuredBuildConfig.equals(Object.class)) {
+            // If set via annotations or programatically then it will have a real value,
+            // otherwise it will be Object.class (annotation default) or null (explicit programmatic).
+            return configuredBuildConfig;
+        }
+
+        final String className = context.getClass().getPackage().getName() + ".BuildConfig";
+        try {
+            return Class.forName(className);
+        } catch (ClassNotFoundException e) {
+            ACRA.log.e(LOG_TAG, "Not adding buildConfig to log. Class Not found : " + className + ". Please configure 'buildConfigClass' in your ACRA config");
+            throw e;
+        }
     }
 }

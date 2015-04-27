@@ -21,6 +21,8 @@ import android.preference.PreferenceManager;
 
 import org.acra.ACRA;
 import org.acra.ACRAConstants;
+import org.acra.BaseCrashReportDialog;
+import org.acra.CrashReportDialog;
 import org.acra.ReportField;
 import org.acra.ReportingInteractionMode;
 import org.acra.sender.HttpSender.Method;
@@ -36,8 +38,8 @@ import java.lang.annotation.Target;
 /**
  * Provide configuration elements to the
  * {@link ACRA#init(android.app.Application)} method. The only mandatory
- * configuration item is the {@link #formKey()} parameter which is the Id of
- * your Google Documents form which will receive reports.
+ * configuration item is the {@link #formUri()} parameter which is the Uri
+ * to the server that will receive your reports.
  * 
  * @author Kevin Gaudin
  * 
@@ -47,11 +49,6 @@ import java.lang.annotation.Target;
 @Target(ElementType.TYPE)
 @Inherited
 public @interface ReportsCrashes {
-
-    /**
-     * @return The id of the Google Doc form.
-     */
-    String formKey();
 
     /**
      * The Uri of your own server-side script that will receive reports. This is
@@ -70,6 +67,7 @@ public @interface ReportsCrashes {
      * </p>
      * <p>
      * Other modes have resources requirements:
+     * </p>
      * <ul>
      * <li>{@link ReportingInteractionMode#TOAST} requires
      * {@link #resToastText()} to be provided to define the text that you want
@@ -78,9 +76,10 @@ public @interface ReportsCrashes {
      * {@link #resNotifTickerText()}, {@link #resNotifTitle()},
      * {@link #resNotifText()}, {@link #resDialogText()}.</li>
      * <li>{@link ReportingInteractionMode#DIALOG} requires
-     * {@link #resDialogText()}</li>. Default is
-     * {@link ReportingInteractionMode#SILENT}
+     * {@link #resDialogText()}.</li>
      * </ul>
+     * <p>
+     * Default is {@link ReportingInteractionMode#SILENT}
      * </p>
      * 
      * @return the interaction mode that you want ACRA to implement.
@@ -293,7 +292,7 @@ public @interface ReportsCrashes {
      * <p>
      * Redefines the list of {@link ReportField}s collected and sent in your
      * reports. If you modify this list, you have to create a new Google Drive
-     * Spreadsheet & Form which will be based on these fields as column headers.
+     * Spreadsheet &amp; Form which will be based on these fields as column headers.
      * </p>
      * <p>
      * The fields order is significant. You can also use this property to modify
@@ -302,6 +301,7 @@ public @interface ReportsCrashes {
      * <p>
      * The default list is the following, except if you send reports by mail
      * using {@link #mailTo()}.
+     * </p>
      * <ul>
      * <li>
      * {@link ReportField#REPORT_ID}</li>
@@ -366,7 +366,6 @@ public @interface ReportsCrashes {
      * <li>
      * {@link ReportField#SETTINGS_GLOBAL}</li>
      * </ul>
-     * </p>
      * 
      * @return ReportField Array listing the fields to be included in the
      *         report.
@@ -379,6 +378,7 @@ public @interface ReportsCrashes {
      * email. This allows to get rid of the INTERNET permission. Reports content
      * can be customized with {@link #customReportContent()} . Default fields
      * are:
+     * </p>
      * <ul>
      * <li>
      * {@link ReportField#USER_COMMENT}</li>
@@ -395,7 +395,6 @@ public @interface ReportsCrashes {
      * <li>
      * {@link ReportField#STACK_TRACE}</li>
      * </ul>
-     * </p>
      * 
      * @return email address to which to send reports.
      */
@@ -484,6 +483,15 @@ public @interface ReportsCrashes {
     boolean sendReportsInDevMode() default ACRAConstants.DEFAULT_SEND_REPORTS_IN_DEV_MODE;
 
     /**
+     * Set this to false if you want to disable sending reports at the time the
+     * exception is caught. In this case, reports will not be sent until the
+     * application is restarted.
+     *
+     * @return false if reports should not be sent.
+     */
+    boolean sendReportsAtShutdown() default ACRAConstants.DEFAULT_SEND_REPORTS_AT_SHUTDOWN;
+
+    /**
      * Provide here regex patterns to be evaluated on each SharedPreference key
      * to exclude KV pairs from the collected SharedPreferences. This allows you
      * to exclude sensitive user data like passwords to be collected.
@@ -501,6 +509,13 @@ public @interface ReportsCrashes {
      * @return an array of regex patterns, every matching key is not collected.
      */
     String[] excludeMatchingSettingsKeys() default {};
+
+    /**
+     * The default value will be a BuildConfig class residing in the same package as the Application class.
+     *
+     * @return BuildConfig class from which to read any BuildConfig attributes.
+     */
+    Class buildConfigClass() default Object.class;
 
     /**
      * To use in combination with {@link ReportField#APPLICATION_LOG} to set the
@@ -525,24 +540,6 @@ public @interface ReportsCrashes {
 
     /**
      * <p>
-     * Default behavior is to send reports to an URL following the format:
-     * "https://spreadsheets.google.com/formResponse?formkey=%s&amp;ifq" with %s
-     * replaced by the {@link #formKey()} value.
-     * </p>
-     * 
-     * <p>
-     * If Google ever changed its URI schemes for Forms (changing the host name
-     * or parameters names for example), you would be able to override it with
-     * the new value with the present method.
-     * </p>
-     * 
-     * @return The format of the URL used to post report data in a Google Form,
-     *         including a %s token which is replaced by the formKey.
-     */
-    String googleFormUrlFormat() default ACRAConstants.DEFAULT_GOOGLE_FORM_URL_FORMAT;
-
-    /**
-     * <p>
      * Set this to true if you need to post reports to your own server using an
      * SSL connection with a self-signed certificate.
      * </p>
@@ -552,12 +549,20 @@ public @interface ReportsCrashes {
      */
     boolean disableSSLCertValidation() default ACRAConstants.DEFAULT_DISABLE_SSL_CERT_VALIDATION;
 
+    String httpsSocketFactoryFactoryClass() default ACRAConstants.DEFAULT_HTTP_SOCKET_FACTORY_FACTORY_CLASS;
+
+    /**
+     * @return Class for the CrashReportDialog used when sending intent.
+     *  If not provided, defaults to CrashReportDialog.class
+     */
+    Class<? extends BaseCrashReportDialog> reportDialogClass() default CrashReportDialog.class;
+
     /**
      * <p>
-     * The {@link Method} to be used when posting with {@link #formKey()}.
+     * The {@link Method} to be used when posting with {@link #formUri()}.
      * </p>
-     * 
-     * @return
+     *
+     * @return HTTP method used when posting reports.
      */
     Method httpMethod() default Method.POST;
 

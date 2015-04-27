@@ -25,7 +25,6 @@ import org.acra.ACRA;
 
 import android.content.Context;
 import android.content.res.Configuration;
-import android.util.Log;
 import android.util.SparseArray;
 
 /**
@@ -55,60 +54,61 @@ public final class ConfigurationCollector {
     private static final String PREFIX_KEYBOARDHIDDEN = "KEYBOARDHIDDEN_";
     private static final String PREFIX_KEYBOARD = "KEYBOARD_";
     private static final String PREFIX_HARDKEYBOARDHIDDEN = "HARDKEYBOARDHIDDEN_";
-    private static SparseArray<String> mHardKeyboardHiddenValues = new SparseArray<String>();
-    private static SparseArray<String> mKeyboardValues = new SparseArray<String>();
-    private static SparseArray<String> mKeyboardHiddenValues = new SparseArray<String>();
-    private static SparseArray<String> mNavigationValues = new SparseArray<String>();
-    private static SparseArray<String> mNavigationHiddenValues = new SparseArray<String>();
-    private static SparseArray<String> mOrientationValues = new SparseArray<String>();
-    private static SparseArray<String> mScreenLayoutValues = new SparseArray<String>();
-    private static SparseArray<String> mTouchScreenValues = new SparseArray<String>();
-    private static SparseArray<String> mUiModeValues = new SparseArray<String>();
 
-    private static final HashMap<String, SparseArray<String>> mValueArrays = new HashMap<String, SparseArray<String>>();
+    private final HashMap<String, SparseArray<String>> mValueArrays = new HashMap<String, SparseArray<String>>();
 
-    // Static init
-    static {
-        mValueArrays.put(PREFIX_HARDKEYBOARDHIDDEN, mHardKeyboardHiddenValues);
-        mValueArrays.put(PREFIX_KEYBOARD, mKeyboardValues);
-        mValueArrays.put(PREFIX_KEYBOARDHIDDEN, mKeyboardHiddenValues);
-        mValueArrays.put(PREFIX_NAVIGATION, mNavigationValues);
-        mValueArrays.put(PREFIX_NAVIGATIONHIDDEN, mNavigationHiddenValues);
-        mValueArrays.put(PREFIX_ORIENTATION, mOrientationValues);
-        mValueArrays.put(PREFIX_SCREENLAYOUT, mScreenLayoutValues);
-        mValueArrays.put(PREFIX_TOUCHSCREEN, mTouchScreenValues);
-        mValueArrays.put(PREFIX_UI_MODE, mUiModeValues);
+    private ConfigurationCollector() {
+
+        final SparseArray<String> hardKeyboardHiddenValues = new SparseArray<String>();
+        final SparseArray<String> keyboardValues = new SparseArray<String>();
+        final SparseArray<String> keyboardHiddenValues = new SparseArray<String>();
+        final SparseArray<String> navigationValues = new SparseArray<String>();
+        final SparseArray<String> navigationHiddenValues = new SparseArray<String>();
+        final SparseArray<String> orientationValues = new SparseArray<String>();
+        final SparseArray<String> screenLayoutValues = new SparseArray<String>();
+        final SparseArray<String> touchScreenValues = new SparseArray<String>();
+        final SparseArray<String> uiModeValues = new SparseArray<String>();
 
         for (final Field f : Configuration.class.getFields()) {
             if (Modifier.isStatic(f.getModifiers()) && Modifier.isFinal(f.getModifiers())) {
                 final String fieldName = f.getName();
                 try {
                     if (fieldName.startsWith(PREFIX_HARDKEYBOARDHIDDEN)) {
-                        mHardKeyboardHiddenValues.put(f.getInt(null), fieldName);
+                        hardKeyboardHiddenValues.put(f.getInt(null), fieldName);
                     } else if (fieldName.startsWith(PREFIX_KEYBOARD)) {
-                        mKeyboardValues.put(f.getInt(null), fieldName);
+                        keyboardValues.put(f.getInt(null), fieldName);
                     } else if (fieldName.startsWith(PREFIX_KEYBOARDHIDDEN)) {
-                        mKeyboardHiddenValues.put(f.getInt(null), fieldName);
+                        keyboardHiddenValues.put(f.getInt(null), fieldName);
                     } else if (fieldName.startsWith(PREFIX_NAVIGATION)) {
-                        mNavigationValues.put(f.getInt(null), fieldName);
+                        navigationValues.put(f.getInt(null), fieldName);
                     } else if (fieldName.startsWith(PREFIX_NAVIGATIONHIDDEN)) {
-                        mNavigationHiddenValues.put(f.getInt(null), fieldName);
+                        navigationHiddenValues.put(f.getInt(null), fieldName);
                     } else if (fieldName.startsWith(PREFIX_ORIENTATION)) {
-                        mOrientationValues.put(f.getInt(null), fieldName);
+                        orientationValues.put(f.getInt(null), fieldName);
                     } else if (fieldName.startsWith(PREFIX_SCREENLAYOUT)) {
-                        mScreenLayoutValues.put(f.getInt(null), fieldName);
+                        screenLayoutValues.put(f.getInt(null), fieldName);
                     } else if (fieldName.startsWith(PREFIX_TOUCHSCREEN)) {
-                        mTouchScreenValues.put(f.getInt(null), fieldName);
+                        touchScreenValues.put(f.getInt(null), fieldName);
                     } else if (fieldName.startsWith(PREFIX_UI_MODE)) {
-                        mUiModeValues.put(f.getInt(null), fieldName);
+                        uiModeValues.put(f.getInt(null), fieldName);
                     }
                 } catch (IllegalArgumentException e) {
-                    Log.w(LOG_TAG, "Error while inspecting device configuration: ", e);
+                    ACRA.log.w(LOG_TAG, "Error while inspecting device configuration: ", e);
                 } catch (IllegalAccessException e) {
-                    Log.w(LOG_TAG, "Error while inspecting device configuration: ", e);
+                    ACRA.log.w(LOG_TAG, "Error while inspecting device configuration: ", e);
                 }
             }
         }
+
+        mValueArrays.put(PREFIX_HARDKEYBOARDHIDDEN, hardKeyboardHiddenValues);
+        mValueArrays.put(PREFIX_KEYBOARD, keyboardValues);
+        mValueArrays.put(PREFIX_KEYBOARDHIDDEN, keyboardHiddenValues);
+        mValueArrays.put(PREFIX_NAVIGATION, navigationValues);
+        mValueArrays.put(PREFIX_NAVIGATIONHIDDEN, navigationHiddenValues);
+        mValueArrays.put(PREFIX_ORIENTATION, orientationValues);
+        mValueArrays.put(PREFIX_SCREENLAYOUT, screenLayoutValues);
+        mValueArrays.put(PREFIX_TOUCHSCREEN, touchScreenValues);
+        mValueArrays.put(PREFIX_UI_MODE, uiModeValues);
     }
 
     /**
@@ -120,7 +120,7 @@ public final class ConfigurationCollector {
      * @return A String describing all the fields of the given Configuration,
      *         with values replaced by constant names.
      */
-    public static String toString(Configuration conf) {
+    private String toString(Configuration conf) {
         final StringBuilder result = new StringBuilder();
         for (final Field f : conf.getClass().getFields()) {
             try {
@@ -135,9 +135,9 @@ public final class ConfigurationCollector {
                     result.append('\n');
                 }
             } catch (IllegalArgumentException e) {
-                Log.e(LOG_TAG, "Error while inspecting device configuration: ", e);
+                ACRA.log.e(LOG_TAG, "Error while inspecting device configuration: ", e);
             } catch (IllegalAccessException e) {
-                Log.e(LOG_TAG, "Error while inspecting device configuration: ", e);
+                ACRA.log.e(LOG_TAG, "Error while inspecting device configuration: ", e);
             }
         }
         return result.toString();
@@ -158,7 +158,7 @@ public final class ConfigurationCollector {
      *         constant name.
      * @throws IllegalAccessException if the supplied field is inaccessible.
      */
-    private static String getFieldValueName(Configuration conf, Field f) throws IllegalAccessException {
+    private String getFieldValueName(Configuration conf, Field f) throws IllegalAccessException {
         final String fieldName = f.getName();
         if (fieldName.equals(FIELD_MCC) || fieldName.equals(FIELD_MNC)) {
             return Integer.toString(f.getInt(conf));
@@ -222,10 +222,11 @@ public final class ConfigurationCollector {
      */
     public static String collectConfiguration(Context context) {
         try {
+            final ConfigurationCollector collector = new ConfigurationCollector();
             final Configuration crashConf = context.getResources().getConfiguration();
-            return ConfigurationCollector.toString(crashConf);
+            return collector.toString(crashConf);
         } catch (RuntimeException e) {
-            Log.w(ACRA.LOG_TAG, "Couldn't retrieve CrashConfiguration for : " + context.getPackageName(), e);
+            ACRA.log.w(LOG_TAG, "Couldn't retrieve CrashConfiguration for : " + context.getPackageName(), e);
             return "Couldn't retrieve crash config";
         }
     }

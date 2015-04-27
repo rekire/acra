@@ -15,30 +15,6 @@
  */
 package org.acra;
 
-import static org.acra.ACRA.LOG_TAG;
-import static org.acra.ReportField.IS_SILENT;
-
-import java.io.File;
-import java.lang.Thread.UncaughtExceptionHandler;
-import java.lang.ref.WeakReference;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-
-import org.acra.annotation.ReportsCrashes;
-import org.acra.collector.Compatibility;
-import org.acra.collector.ConfigurationCollector;
-import org.acra.collector.CrashReportData;
-import org.acra.collector.CrashReportDataFactory;
-import org.acra.jraf.android.util.activitylifecyclecallbackscompat.ActivityLifecycleCallbacksCompat;
-import org.acra.jraf.android.util.activitylifecyclecallbackscompat.ApplicationHelper;
-import org.acra.sender.EmailIntentSender;
-import org.acra.sender.GoogleFormSender;
-import org.acra.sender.HttpSender;
-import org.acra.sender.ReportSender;
-import org.acra.util.PackageManagerWrapper;
-import org.acra.util.ToastSender;
-
 import android.Manifest.permission;
 import android.app.Activity;
 import android.app.Application;
@@ -52,8 +28,31 @@ import android.content.pm.PackageInfo;
 import android.os.Bundle;
 import android.os.Looper;
 import android.text.format.Time;
-import android.util.Log;
 import android.widget.Toast;
+import org.acra.annotation.ReportsCrashes;
+import org.acra.collector.Compatibility;
+import org.acra.collector.ConfigurationCollector;
+import org.acra.collector.CrashReportData;
+import org.acra.collector.CrashReportDataFactory;
+import org.acra.jraf.android.util.activitylifecyclecallbackscompat.ActivityLifecycleCallbacksCompat;
+import org.acra.jraf.android.util.activitylifecyclecallbackscompat.ApplicationHelper;
+import org.acra.sender.EmailIntentSender;
+import org.acra.sender.HttpSender;
+import org.acra.sender.ReportSender;
+import org.acra.util.PackageManagerWrapper;
+import org.acra.util.ToastSender;
+
+import java.io.File;
+import java.lang.Thread.UncaughtExceptionHandler;
+import java.lang.ref.WeakReference;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import static org.acra.ACRA.LOG_TAG;
+import static org.acra.ReportField.IS_SILENT;
 
 /**
  * <p>
@@ -64,7 +63,8 @@ import android.widget.Toast;
  * <p>
  * When a crash occurs, it collects data of the crash context (device, system,
  * stack trace...) and writes a report file in the application private
- * directory. This report file is then sent :
+ * directory. This report file is then sent:
+ * </p>
  * <ul>
  * <li>immediately if {@link ReportsCrashes#mode} is set to
  * {@link ReportingInteractionMode#SILENT} or
@@ -74,7 +74,6 @@ import android.widget.Toast;
  * <li>when the user accepts to send it if {@link ReportsCrashes#mode()} is set
  * to {@link ReportingInteractionMode#NOTIFICATION}.</li>
  * </ul>
- * </p>
  * <p>
  * If an error occurs while sending a report, it is kept for later attempts.
  * </p>
@@ -100,32 +99,30 @@ public class ErrorReporter implements Thread.UncaughtExceptionHandler {
     // report.
     private final Thread.UncaughtExceptionHandler mDfltExceptionHandler;
 
-    private Thread brokenThread;
-    private Throwable unhandledThrowable;
     private WeakReference<Activity> lastActivityCreated = new WeakReference<Activity>(null);
 
     /**
      * This is used to wait for the crash toast to end it's display duration
      * before killing the Application.
      */
-    private static boolean toastWaitEnded = true;
+    private boolean toastWaitEnded = true;
 
     private static final ExceptionHandlerInitializer NULL_EXCEPTION_HANDLER_INITIALIZER = new ExceptionHandlerInitializer() {
         @Override
         public void initializeExceptionHandler(ErrorReporter reporter) {
         }
     };
-    
+
     private volatile ExceptionHandlerInitializer exceptionHandlerInitializer = NULL_EXCEPTION_HANDLER_INITIALIZER;
 
     /**
-     * Used to create a new (non-cached) PendingIntent each time a new crash occurs. 
+     * Used to create a new (non-cached) PendingIntent each time a new crash occurs.
      */
     private static int mNotificationCounter = 0;
-    
+
     /**
      * Can only be constructed from within this class.
-     * 
+     *
      * @param context
      *            Context for the application in which ACRA is running.
      * @param prefs
@@ -141,7 +138,13 @@ public class ErrorReporter implements Thread.UncaughtExceptionHandler {
         this.enabled = enabled;
 
         // Store the initial Configuration state.
-        final String initialConfiguration = ConfigurationCollector.collectConfiguration(mContext);
+        // This is expensive to gather, so only do so if we plan to report it.
+        final String initialConfiguration;
+        if (ACRA.getConfig().getReportFields().contains(ReportField.INITIAL_CONFIGURATION)) {
+            initialConfiguration = ConfigurationCollector.collectConfiguration(mContext);
+        } else {
+            initialConfiguration = null;
+        }
 
         // Sets the application start date.
         // This will be included in the reports, will be helpful compared to
@@ -150,13 +153,13 @@ public class ErrorReporter implements Thread.UncaughtExceptionHandler {
         appStartDate.setToNow();
 
         if (Compatibility.getAPILevel() >= 14) { // ActivityLifecycleCallback
-                                                 // only available for API14+
+            // only available for API14+
             ApplicationHelper.registerActivityLifecycleCallbacks(context, new ActivityLifecycleCallbacksCompat() {
                 @Override
                 public void onActivityCreated(Activity activity, Bundle savedInstanceState) {
                     if (ACRA.DEV_LOGGING)
-                        ACRA.log.d(ACRA.LOG_TAG, "onActivityCreated " + activity.getClass());
-                    if (!(activity instanceof CrashReportDialog)) {
+                        ACRA.log.d(LOG_TAG, "onActivityCreated " + activity.getClass());
+                    if (!(activity instanceof BaseCrashReportDialog)) {
                         // Ignore CrashReportDialog because we want the last
                         // application Activity that was started so that we can
                         // explicitly kill it off.
@@ -167,37 +170,37 @@ public class ErrorReporter implements Thread.UncaughtExceptionHandler {
                 @Override
                 public void onActivityStarted(Activity activity) {
                     if (ACRA.DEV_LOGGING)
-                        ACRA.log.d(ACRA.LOG_TAG, "onActivityStarted " + activity.getClass());
+                        ACRA.log.d(LOG_TAG, "onActivityStarted " + activity.getClass());
                 }
 
                 @Override
                 public void onActivityResumed(Activity activity) {
                     if (ACRA.DEV_LOGGING)
-                        ACRA.log.d(ACRA.LOG_TAG, "onActivityResumed " + activity.getClass());
+                        ACRA.log.d(LOG_TAG, "onActivityResumed " + activity.getClass());
                 }
 
                 @Override
                 public void onActivityPaused(Activity activity) {
                     if (ACRA.DEV_LOGGING)
-                        ACRA.log.d(ACRA.LOG_TAG, "onActivityPaused " + activity.getClass());
+                        ACRA.log.d(LOG_TAG, "onActivityPaused " + activity.getClass());
                 }
 
                 @Override
                 public void onActivityStopped(Activity activity) {
                     if (ACRA.DEV_LOGGING)
-                        ACRA.log.d(ACRA.LOG_TAG, "onActivityStopped " + activity.getClass());
+                        ACRA.log.d(LOG_TAG, "onActivityStopped " + activity.getClass());
                 }
 
                 @Override
                 public void onActivitySaveInstanceState(Activity activity, Bundle outState) {
                     if (ACRA.DEV_LOGGING)
-                        ACRA.log.i(ACRA.LOG_TAG, "onActivitySaveInstanceState " + activity.getClass());
+                        ACRA.log.i(LOG_TAG, "onActivitySaveInstanceState " + activity.getClass());
                 }
 
                 @Override
                 public void onActivityDestroyed(Activity activity) {
                     if (ACRA.DEV_LOGGING)
-                        ACRA.log.i(ACRA.LOG_TAG, "onActivityDestroyed " + activity.getClass());
+                        ACRA.log.i(LOG_TAG, "onActivityDestroyed " + activity.getClass());
                 }
             });
         }
@@ -208,9 +211,6 @@ public class ErrorReporter implements Thread.UncaughtExceptionHandler {
         // Don't do it twice to avoid losing the original handler.
         mDfltExceptionHandler = Thread.getDefaultUncaughtExceptionHandler();
         Thread.setDefaultUncaughtExceptionHandler(this);
-
-        // Check for pending reports
-        checkReportsOnApplicationStart();
     }
 
     /**
@@ -221,19 +221,21 @@ public class ErrorReporter implements Thread.UncaughtExceptionHandler {
      * @deprecated since 4.3.0 Use {@link org.acra.ACRA#getErrorReporter()}
      *             instead.
      */
+    @Deprecated
     public static ErrorReporter getInstance() {
         return ACRA.getErrorReporter();
     }
 
     /**
      * Deprecated. Use {@link #putCustomData(String, String)}.
-     * 
+     *
      * @param key
      *            A key for your custom data.
      * @param value
      *            The value associated to your key.
      */
     @Deprecated
+    @SuppressWarnings("unused")
     public void addCustomData(String key, String value) {
         crashReportDataFactory.putCustomData(key, value);
     }
@@ -250,7 +252,7 @@ public class ErrorReporter implements Thread.UncaughtExceptionHandler {
      * The key/value pairs will be stored in the GoogleDoc spreadsheet in the
      * "custom" column, as a text containing a 'key = value' pair on each line.
      * </p>
-     * 
+     *
      * @param key
      *            A key for your custom data.
      * @param value
@@ -259,6 +261,7 @@ public class ErrorReporter implements Thread.UncaughtExceptionHandler {
      * @see #removeCustomData(String)
      * @see #getCustomData(String)
      */
+    @SuppressWarnings("unused")
     public String putCustomData(String key, String value) {
         return crashReportDataFactory.putCustomData(key, value);
     }
@@ -279,9 +282,9 @@ public class ErrorReporter implements Thread.UncaughtExceptionHandler {
      * </p>
      * <p>
      * Example. Add to the {@link Application#onCreate()}:
+     * </p>
      * 
      * <pre>
-     * {@code
      * ACRA.getErrorReporter().setExceptionHandlerInitializer(new ExceptionHandlerInitializer() {
      *     <code>@Override</code> public void initializeExceptionHandler(ErrorReporter reporter) {
      *         reporter.putCustomData("CUSTOM_ACCUMULATED_DATA_TAG", someAccumulatedData.toString);
@@ -289,50 +292,51 @@ public class ErrorReporter implements Thread.UncaughtExceptionHandler {
      * });
      * </pre>
      * 
-     * </p>
-     * 
      * @param initializer   The initializer. Can be <code>null</code>.
      */
     public void setExceptionHandlerInitializer(ExceptionHandlerInitializer initializer) {
-	    exceptionHandlerInitializer = (initializer != null) ? initializer : NULL_EXCEPTION_HANDLER_INITIALIZER;
+        exceptionHandlerInitializer = (initializer != null) ? initializer : NULL_EXCEPTION_HANDLER_INITIALIZER;
     }
 
     /**
      * Removes a key/value pair from your reports custom data field.
-     * 
+     *
      * @param key
      *            The key of the data to be removed.
      * @return The value for this key before removal.
      * @see #putCustomData(String, String)
      * @see #getCustomData(String)
      */
+    @SuppressWarnings("unused")
     public String removeCustomData(String key) {
         return crashReportDataFactory.removeCustomData(key);
     }
-    
+
     /**
      * Removes all key/value pairs from your reports custom data field.
      */
+    @SuppressWarnings("unused")
     public void clearCustomData() {
         crashReportDataFactory.clearCustomData();
     }
 
     /**
      * Gets the current value for a key in your reports custom data field.
-     * 
+     *
      * @param key
      *            The key of the data to be retrieved.
      * @return The value for this key.
      * @see #putCustomData(String, String)
      * @see #removeCustomData(String)
      */
+    @SuppressWarnings("unused")
     public String getCustomData(String key) {
         return crashReportDataFactory.getCustomData(key);
     }
 
     /**
      * Add a {@link ReportSender} to the list of active {@link ReportSender}s.
-     * 
+     *
      * @param sender
      *            The {@link ReportSender} to be added.
      */
@@ -343,20 +347,22 @@ public class ErrorReporter implements Thread.UncaughtExceptionHandler {
     /**
      * Remove a specific instance of {@link ReportSender} from the list of
      * active {@link ReportSender}s.
-     * 
+     *
      * @param sender
      *            The {@link ReportSender} instance to be removed.
      */
+    @SuppressWarnings("unused")
     public void removeReportSender(ReportSender sender) {
         mReportSenders.remove(sender);
     }
 
     /**
      * Remove all {@link ReportSender} instances from a specific class.
-     * 
+     *
      * @param senderClass
      *            ReportSender class whose instances should be removed.
      */
+    @SuppressWarnings("unused")
     public void removeReportSenders(Class<?> senderClass) {
         if (ReportSender.class.isAssignableFrom(senderClass)) {
             for (ReportSender sender : mReportSenders) {
@@ -379,7 +385,7 @@ public class ErrorReporter implements Thread.UncaughtExceptionHandler {
     /**
      * Removes all previously set {@link ReportSender}s and set the given one as
      * the new {@link ReportSender}.
-     * 
+     *
      * @param sender
      *            ReportSender to set as the sole sender for this ErrorReporter.
      */
@@ -390,38 +396,40 @@ public class ErrorReporter implements Thread.UncaughtExceptionHandler {
 
     /*
      * (non-Javadoc)
-     * 
+     *
      * @see
      * java.lang.Thread.UncaughtExceptionHandler#uncaughtException(java.lang
      * .Thread, java.lang.Throwable)
      */
+    @Override
     public void uncaughtException(Thread t, Throwable e) {
         try {
             // If we're not enabled then just pass the Exception on to any
             // defaultExceptionHandler.
             if (!enabled) {
                 if (mDfltExceptionHandler != null) {
-                    Log.e(ACRA.LOG_TAG, "ACRA is disabled for " + mContext.getPackageName()
-                            + " - forwarding uncaught Exception on to default ExceptionHandler");
+                    ACRA.log.e(LOG_TAG, "ACRA is disabled for " + mContext.getPackageName()
+                        + " - forwarding uncaught Exception on to default ExceptionHandler");
                     mDfltExceptionHandler.uncaughtException(t, e);
                 } else {
-                    Log.e(ACRA.LOG_TAG, "ACRA is disabled for " + mContext.getPackageName()
-                            + " - no default ExceptionHandler");
-                    Log.e(ACRA.LOG_TAG,
+                    ACRA.log.e(LOG_TAG, "ACRA is disabled for " + mContext.getPackageName()
+                        + " - no default ExceptionHandler");
+                    ACRA.log.e(LOG_TAG,
                           "ACRA caught a " + e.getClass().getSimpleName() + " for " + mContext.getPackageName(), e);
                 }
                 return;
             }
 
-            brokenThread = t;
-            unhandledThrowable = e;
-
-            Log.e(ACRA.LOG_TAG,
+            ACRA.log.e(LOG_TAG,
                   "ACRA caught a " + e.getClass().getSimpleName() + " for " + mContext.getPackageName(), e);
-            Log.d(ACRA.LOG_TAG, "Building report");
+            ACRA.log.d(LOG_TAG, "Building report");
 
             // Generate and send crash report
-            handleException(e, ACRA.getConfig().mode(), false, true);
+            reportBuilder()
+                .uncaughtExceptionThread(t)
+                .exception(e)
+                .endsApplication()
+                .send();
         } catch (Throwable fatality) {
             // ACRA failed. Prevent any recursive call to
             // ACRA.uncaughtException(), let the native reporter do its job.
@@ -432,26 +440,26 @@ public class ErrorReporter implements Thread.UncaughtExceptionHandler {
     }
 
     /**
-     * 
+     * End the application.
      */
-    private void endApplication() {
-        if (ACRA.getConfig().mode() == ReportingInteractionMode.SILENT
-                || (ACRA.getConfig().mode() == ReportingInteractionMode.TOAST && ACRA.getConfig()
-                        .forceCloseDialogAfterToast())) {
-            // If using silent mode, let the system default handler do it's job
-            // and display the force close dialog.
-            if (mDfltExceptionHandler != null) {
-                mDfltExceptionHandler.uncaughtException(brokenThread, unhandledThrowable);
-                Log.d(ACRA.LOG_TAG, "Handing Exception on to default ExceptionHandler");
-            } else {
-                Log.w(ACRA.LOG_TAG, "NOT Handing Exception on to default ExceptionHandler - non configured");
-            }
+    private void endApplication(Thread uncaughtExceptionThread, Throwable th) {
+        // TODO It would be better to create an explicit config attribute #letDefaultHandlerEndApplication
+        // as the intent is clearer and would allows you to switch it off for SILENT.
+        final boolean letDefaultHandlerEndApplication = (
+             ACRA.getConfig().mode() == ReportingInteractionMode.SILENT ||
+            (ACRA.getConfig().mode() == ReportingInteractionMode.TOAST && ACRA.getConfig().forceCloseDialogAfterToast())
+        );
+
+        final boolean handlingUncaughtException = uncaughtExceptionThread != null;
+        if (handlingUncaughtException && letDefaultHandlerEndApplication && (mDfltExceptionHandler != null)) {
+            // Let the system default handler do it's job and display the force close dialog.
+            ACRA.log.d(LOG_TAG, "Handing Exception on to default ExceptionHandler");
+            mDfltExceptionHandler.uncaughtException(uncaughtExceptionThread, th);
         } else {
             // If ACRA handles user notifications with a Toast or a Notification
             // the Force Close dialog is one more notification to the user...
             // We choose to close the process ourselves using the same actions.
-            Log.e(LOG_TAG, mContext.getPackageName() + " fatal error : " + unhandledThrowable.getMessage(),
-                    unhandledThrowable);
+            ACRA.log.e(LOG_TAG, mContext.getPackageName() + " fatal error : " + th.getMessage(), th);
 
             // Trying to solve
             // https://github.com/ACRA/acra/issues/42#issuecomment-12134144
@@ -459,9 +467,9 @@ public class ErrorReporter implements Thread.UncaughtExceptionHandler {
             // it. Activity#finish (and maybe it's parent too).
             final Activity lastActivity = lastActivityCreated.get();
             if (lastActivity != null) {
-                Log.i(LOG_TAG, "Finishing the last Activity prior to killing the Process");
+                ACRA.log.i(LOG_TAG, "Finishing the last Activity prior to killing the Process");
                 lastActivity.finish();
-                Log.i(LOG_TAG, "Finished " + lastActivity.getClass());
+                ACRA.log.i(LOG_TAG, "Finished " + lastActivity.getClass());
                 lastActivityCreated.clear();
             }
 
@@ -474,7 +482,7 @@ public class ErrorReporter implements Thread.UncaughtExceptionHandler {
      * Send a report for this {@link Throwable} silently (forces the use of
      * {@link ReportingInteractionMode#SILENT} for this report, whatever is the
      * mode set for the application. Very useful for tracking difficult defects.
-     * 
+     *
      * @param e
      *            The {@link Throwable} to be reported. If null the report will
      *            contain a new Exception("Report requested by developer").
@@ -482,29 +490,32 @@ public class ErrorReporter implements Thread.UncaughtExceptionHandler {
     public void handleSilentException(Throwable e) {
         // Mark this report as silent.
         if (enabled) {
-            handleException(e, ReportingInteractionMode.SILENT, true, false);
-            Log.d(LOG_TAG, "ACRA sent Silent report.");
+            reportBuilder()
+                .exception(e)
+                .forceSilent()
+                .send();
+            ACRA.log.d(LOG_TAG, "ACRA sent Silent report.");
             return;
         }
 
-        Log.d(LOG_TAG, "ACRA is disabled. Silent report not sent.");
+        ACRA.log.d(LOG_TAG, "ACRA is disabled. Silent report not sent.");
     }
 
     /**
      * Enable or disable this ErrorReporter. By default it is enabled.
-     * 
+     *
      * @param enabled
      *            Whether this ErrorReporter should capture Exceptions and
      *            forward them as crash reports.
      */
     public void setEnabled(boolean enabled) {
-        Log.i(ACRA.LOG_TAG, "ACRA is " + (enabled ? "enabled" : "disabled") + " for " + mContext.getPackageName());
+        ACRA.log.i(LOG_TAG, "ACRA is " + (enabled ? "enabled" : "disabled") + " for " + mContext.getPackageName());
         this.enabled = enabled;
     }
 
     /**
      * Starts a Thread to start sending outstanding error reports.
-     * 
+     *
      * @param onlySendSilentReports
      *            If true then only send silent reports.
      * @param approveReportsFirst
@@ -530,23 +541,27 @@ public class ErrorReporter implements Thread.UncaughtExceptionHandler {
      */
     public void checkReportsOnApplicationStart() {
 
-        // Delete any old unsent reports if this is a newer version of the app
-        // than when we last started.
-        final long lastVersionNr = prefs.getInt(ACRA.PREF_LAST_VERSION_NR, 0);
-        final PackageManagerWrapper packageManagerWrapper = new PackageManagerWrapper(mContext);
-        final PackageInfo packageInfo = packageManagerWrapper.getPackageInfo();
-        final boolean newVersion = (packageInfo != null && packageInfo.versionCode > lastVersionNr);
-        if (newVersion) {
-            if (ACRA.getConfig().deleteOldUnsentReportsOnApplicationStart()) {
-                deletePendingReports();
+        if (ACRA.getConfig().deleteOldUnsentReportsOnApplicationStart()) {
+            // Delete any old unsent reports if this is a newer version of the app
+            // than when we last started.
+            final long lastVersionNr = prefs.getInt(ACRA.PREF_LAST_VERSION_NR, 0);
+            final PackageManagerWrapper packageManagerWrapper = new PackageManagerWrapper(mContext);
+            final PackageInfo packageInfo = packageManagerWrapper.getPackageInfo();
+            if (packageInfo != null) {
+                final boolean newVersion = packageInfo.versionCode > lastVersionNr;
+                if (newVersion) {
+                    deletePendingReports();
+                }
+                final SharedPreferences.Editor prefsEditor = prefs.edit();
+                prefsEditor.putInt(ACRA.PREF_LAST_VERSION_NR, packageInfo.versionCode);
+                prefsEditor.commit();
             }
-            final SharedPreferences.Editor prefsEditor = prefs.edit();
-            prefsEditor.putInt(ACRA.PREF_LAST_VERSION_NR, packageInfo.versionCode);
-            prefsEditor.commit();
         }
 
-        if ((ACRA.getConfig().mode() == ReportingInteractionMode.NOTIFICATION || ACRA.getConfig().mode() == ReportingInteractionMode.DIALOG)
-                && ACRA.getConfig().deleteUnapprovedReportsOnApplicationStart()) {
+        ReportingInteractionMode reportingInteractionMode = ACRA.getConfig().mode();
+
+        if ((reportingInteractionMode == ReportingInteractionMode.NOTIFICATION || reportingInteractionMode == ReportingInteractionMode.DIALOG)
+            && ACRA.getConfig().deleteUnapprovedReportsOnApplicationStart()) {
             // NOTIFICATION or DIALOG mode, and there are unapproved reports to
             // send (latest notification/dialog has been ignored: neither
             // accepted
@@ -567,14 +582,12 @@ public class ErrorReporter implements Thread.UncaughtExceptionHandler {
             // notify it.
             // If there are unapproved reports in DIALOG mode, show the dialog
 
-            ReportingInteractionMode reportingInteractionMode = ACRA.getConfig().mode();
 
-            filesList = reportFinder.getCrashReportFiles();
             final boolean onlySilentOrApprovedReports = containsOnlySilentOrApprovedReports(filesList);
 
             if (reportingInteractionMode == ReportingInteractionMode.SILENT
-                    || reportingInteractionMode == ReportingInteractionMode.TOAST
-                    || (onlySilentOrApprovedReports && (reportingInteractionMode == ReportingInteractionMode.NOTIFICATION || reportingInteractionMode == ReportingInteractionMode.DIALOG))) {
+                || reportingInteractionMode == ReportingInteractionMode.TOAST
+                || (onlySilentOrApprovedReports && (reportingInteractionMode == ReportingInteractionMode.NOTIFICATION || reportingInteractionMode == ReportingInteractionMode.DIALOG))) {
 
                 if (reportingInteractionMode == ReportingInteractionMode.TOAST && !onlySilentOrApprovedReports) {
                     // Display the Toast in TOAST mode only if there are
@@ -582,18 +595,8 @@ public class ErrorReporter implements Thread.UncaughtExceptionHandler {
                     ToastSender.sendToast(mContext, ACRA.getConfig().resToastText(), Toast.LENGTH_LONG);
                 }
 
-                Log.v(ACRA.LOG_TAG, "About to start ReportSenderWorker from #checkReportOnApplicationStart");
+                ACRA.log.v(LOG_TAG, "About to start ReportSenderWorker from #checkReportOnApplicationStart");
                 startSendingReports(false, false);
-            } else if (ACRA.getConfig().mode() == ReportingInteractionMode.NOTIFICATION) {
-                // NOTIFICATION mode there are unapproved reports to send
-                // Display the notification.
-                // The user comment will be associated to the latest report
-                notifySendReport(getLatestNonSilentReport(filesList));
-            } else if (ACRA.getConfig().mode() == ReportingInteractionMode.DIALOG) {
-                // DIALOG mode: the dialog is always displayed because it has
-                // been put on the task stack before killing the app.
-                // The user can explicitly say Yes or No... or ignore the dialog
-                // with the back button.
             }
 
         }
@@ -601,7 +604,7 @@ public class ErrorReporter implements Thread.UncaughtExceptionHandler {
 
     /**
      * Delete all pending non approved reports.
-     * 
+     *
      * @param keepOne
      *            If you need to keep the latest report, set this to true.
      */
@@ -616,7 +619,7 @@ public class ErrorReporter implements Thread.UncaughtExceptionHandler {
     /**
      * Send a report for a {@link Throwable} with the reporting interaction mode
      * configured by the developer.
-     * 
+     *
      * @param e
      *            The {@link Throwable} to be reported. If null the report will
      *            contain a new Exception("Report requested by developer").
@@ -624,87 +627,113 @@ public class ErrorReporter implements Thread.UncaughtExceptionHandler {
      *            Set this to true if you want the application to be ended after
      *            sending the report.
      */
+    @SuppressWarnings("unused")
     public void handleException(Throwable e, boolean endApplication) {
-        handleException(e, ACRA.getConfig().mode(), false, endApplication);
+        final ReportBuilder builder = reportBuilder()
+            .exception(e);
+        if (endApplication) {
+            builder.endsApplication();
+        }
+        builder.send();
     }
 
     /**
      * Send a report for a {@link Throwable} with the reporting interaction mode
      * configured by the developer, the application is then killed and restarted
      * by the system.
-     * 
+     *
      * @param e
      *            The {@link Throwable} to be reported. If null the report will
      *            contain a new Exception("Report requested by developer").
      */
+    @SuppressWarnings("unused")
     public void handleException(Throwable e) {
-        handleException(e, ACRA.getConfig().mode(), false, false);
+        reportBuilder()
+            .exception(e)
+            .send();
+    }
+
+    /**
+     * Creates a new crash report builder
+     *
+     * @return the newly created {@code ReportBuilder}
+     */
+    public ReportBuilder reportBuilder() {
+        return new ReportBuilder();
+    }
+
+    /**
+     * Helps manage
+     */
+    private static class TimeHelper {
+
+        private Long initialTimeMillis;
+
+        public void setInitialTimeMillis(long initialTimeMillis) {
+            this.initialTimeMillis = initialTimeMillis;
+        }
+
+        /**
+         * @return 0 if the initial time has yet to be set otherwise returns the difference between now and the initial time.
+         */
+        public long getElapsedTime() {
+            return (initialTimeMillis == null) ? 0 : System.currentTimeMillis() - initialTimeMillis;
+        }
     }
 
     /**
      * Try to send a report, if an error occurs stores a report file for a later
      * attempt.
-     * 
-     * @param e
-     *            Throwable to be reported. If null the report will contain a
-     *            new Exception("Report requested by developer").
-     * @param reportingInteractionMode
-     *            The desired interaction mode.
-     * @param forceSilentReport
-     *            This report is to be sent silently, whatever mode has been
-     *            configured.
-     * @param endApplication
-     *            Whether to end the application once the error has been
-     *            handled.
+     *
+     * @param reportBuilder The report builder used to assemble the report
      */
-    private void handleException(Throwable e, ReportingInteractionMode reportingInteractionMode,
-            final boolean forceSilentReport, final boolean endApplication) {
+    private void report(final ReportBuilder reportBuilder) {
 
         if (!enabled) {
             return;
         }
 
-	try {
-	    exceptionHandlerInitializer.initializeExceptionHandler(this);
-	} catch (Exception exceptionInRunnable) {
-	    Log.d(ACRA.LOG_TAG, "Failed to initlize " + exceptionHandlerInitializer + " from #handleException");
-	}
+        try {
+            exceptionHandlerInitializer.initializeExceptionHandler(this);
+        } catch (Exception exceptionInRunnable) {
+            ACRA.log.d(LOG_TAG, "Failed to initlize " + exceptionHandlerInitializer + " from #handleException");
+        }
 
         boolean sendOnlySilentReports = false;
-        if (reportingInteractionMode == null) {
+        ReportingInteractionMode reportingInteractionMode;
+        if (!reportBuilder.mForceSilent) {
             // No interaction mode defined, we assume it has been set during
             // ACRA.initACRA()
             reportingInteractionMode = ACRA.getConfig().mode();
         } else {
+            reportingInteractionMode = ReportingInteractionMode.SILENT;
+
             // An interaction mode has been provided. If ACRA has been
             // initialized with a non SILENT mode and this mode is overridden
             // with SILENT, then we have to send only reports which have been
             // explicitly declared as silent via handleSilentException().
-            if (reportingInteractionMode == ReportingInteractionMode.SILENT
-                    && ACRA.getConfig().mode() != ReportingInteractionMode.SILENT) {
+            if (ACRA.getConfig().mode() != ReportingInteractionMode.SILENT) {
                 sendOnlySilentReports = true;
             }
         }
 
-        if (e == null) {
-            e = new Exception("Report requested by developer");
-        }
-
         final boolean shouldDisplayToast = reportingInteractionMode == ReportingInteractionMode.TOAST
-                || (ACRA.getConfig().resToastText() != 0 && (reportingInteractionMode == ReportingInteractionMode.NOTIFICATION || reportingInteractionMode == ReportingInteractionMode.DIALOG));
+            || (ACRA.getConfig().resToastText() != 0 && (reportingInteractionMode == ReportingInteractionMode.NOTIFICATION || reportingInteractionMode == ReportingInteractionMode.DIALOG));
 
+        final TimeHelper sentToastTimeMillis = new TimeHelper();
         if (shouldDisplayToast) {
             new Thread() {
 
                 /*
                  * (non-Javadoc)
-                 * 
+                 *
                  * @see java.lang.Thread#run()
                  */
                 @Override
                 public void run() {
                     Looper.prepare();
                     ToastSender.sendToast(mContext, ACRA.getConfig().resToastText(), Toast.LENGTH_LONG);
+                    sentToastTimeMillis.setInitialTimeMillis(System.currentTimeMillis());
                     Looper.loop();
                 }
 
@@ -714,130 +743,143 @@ public class ErrorReporter implements Thread.UncaughtExceptionHandler {
             // that the Toast can be read by the user.
         }
 
-        final CrashReportData crashReportData = crashReportDataFactory.createCrashData(e, forceSilentReport,
-                brokenThread);
+        final CrashReportData crashReportData = crashReportDataFactory.createCrashData(reportBuilder.mMessage,
+                                                                                       reportBuilder.mException, reportBuilder.mCustomData,
+                                                                                       reportBuilder.mForceSilent, reportBuilder.mUncaughtExceptionThread);
 
         // Always write the report file
 
         final String reportFileName = getReportFileName(crashReportData);
         saveCrashReportFile(reportFileName, crashReportData);
 
+        if (reportBuilder.mEndsApplication && !ACRA.getConfig().sendReportsAtShutdown()) {
+            endApplication(reportBuilder.mUncaughtExceptionThread, reportBuilder.mException);
+        }
+
         SendWorker sender = null;
 
         if (reportingInteractionMode == ReportingInteractionMode.SILENT
-                || reportingInteractionMode == ReportingInteractionMode.TOAST
-                || prefs.getBoolean(ACRA.PREF_ALWAYS_ACCEPT, false)) {
+            || reportingInteractionMode == ReportingInteractionMode.TOAST
+            || prefs.getBoolean(ACRA.PREF_ALWAYS_ACCEPT, false)) {
 
             // Approve and then send reports now
-            Log.d(ACRA.LOG_TAG, "About to start ReportSenderWorker from #handleException");
+            ACRA.log.d(LOG_TAG, "About to start ReportSenderWorker from #handleException");
             sender = startSendingReports(sendOnlySilentReports, true);
+            if ((reportingInteractionMode == ReportingInteractionMode.SILENT) && !reportBuilder.mEndsApplication) {
+                // Report is being sent silently and the application is not ending.
+                // So no need to wait around for the sender to complete.
+                return;
+            }
+
         } else if (reportingInteractionMode == ReportingInteractionMode.NOTIFICATION) {
-            Log.d(ACRA.LOG_TAG, "Notification will be created on application start.");
+            ACRA.log.d(LOG_TAG, "Creating Notification.");
+            createNotification(reportFileName, reportBuilder);
         }
 
+        toastWaitEnded = true;
         if (shouldDisplayToast) {
-            // A toast is being displayed, we have to wait for its end before
-            // doing anything else.
-            // The toastWaitEnded flag will be checked before any other
-            // operation.
+            // A toast is being displayed, we have to wait for its end before doing anything else.
+            // The toastWaitEnded flag will be checked before any other operation.
             toastWaitEnded = false;
             new Thread() {
 
                 @Override
                 public void run() {
-                    final Time beforeWait = new Time();
-                    final Time currentTime = new Time();
-                    beforeWait.setToNow();
-                    final long beforeWaitInMillis = beforeWait.toMillis(false);
-                    long elapsedTimeInMillis = 0;
-                    while (elapsedTimeInMillis < ACRAConstants.TOAST_WAIT_DURATION) {
+                    ACRA.log.d(LOG_TAG, "Waiting for " + ACRAConstants.TOAST_WAIT_DURATION
+                        + " millis from " + sentToastTimeMillis.initialTimeMillis
+                        + " currentMillis=" + System.currentTimeMillis());
+                    while (sentToastTimeMillis.getElapsedTime() < ACRAConstants.TOAST_WAIT_DURATION) {
                         try {
                             // Wait a bit to let the user read the toast
-                            Thread.sleep(ACRAConstants.TOAST_WAIT_DURATION);
+                            Thread.sleep(100);
                         } catch (InterruptedException e1) {
-                            Log.d(LOG_TAG, "Interrupted while waiting for Toast to end.", e1);
+                            ACRA.log.d(LOG_TAG, "Interrupted while waiting for Toast to end.", e1);
                         }
-                        currentTime.setToNow();
-                        elapsedTimeInMillis = currentTime.toMillis(false) - beforeWaitInMillis;
                     }
                     toastWaitEnded = true;
                 }
             }.start();
         }
 
-        // start an AsyncTask waiting for the end of the sender
-        // call endApplication() in onPostExecute(), only when (toastWaitEnded
-        // == true)
+        // Start an AsyncTask waiting for the end of the sender.
+        // Once sent, call endApplication() if reportBuilder.mEndApplication
         final SendWorker worker = sender;
         final boolean showDirectDialog = (reportingInteractionMode == ReportingInteractionMode.DIALOG)
-                && !prefs.getBoolean(ACRA.PREF_ALWAYS_ACCEPT, false);
+            && !prefs.getBoolean(ACRA.PREF_ALWAYS_ACCEPT, false);
 
         new Thread() {
 
             @Override
             public void run() {
-                // We have to wait for BOTH the toast display wait AND
-                // the worker job to be completed.
-                Log.d(LOG_TAG, "Waiting for Toast + worker...");
-                while (!toastWaitEnded || (worker != null && worker.isAlive())) {
+                // We have to wait for the toast display to be completed.
+                ACRA.log.d(LOG_TAG, "Waiting for Toast");
+                while (!toastWaitEnded) {
                     try {
                         Thread.sleep(100);
                     } catch (InterruptedException e1) {
-                        Log.e(LOG_TAG, "Error : ", e1);
+                        ACRA.log.d(LOG_TAG, "Error : ", e1);
                     }
+                }
+                ACRA.log.d(LOG_TAG, "Finished waiting for Toast");
+
+                // We have to wait for the worker job to be completed.
+                if (worker != null) {
+                    ACRA.log.d(LOG_TAG, "Waiting for Worker");
+                    while (worker.isAlive()) {
+                        try {
+                            Thread.sleep(100);
+                        } catch (InterruptedException e1) {
+                            ACRA.log.d(LOG_TAG, "Error : ", e1);
+                        }
+                    }
+                    ACRA.log.d(LOG_TAG, "Finished waiting for Worker");
                 }
 
                 if (showDirectDialog) {
                     // Create a new activity task with the confirmation dialog.
                     // This new task will be persisted on application restart
-                    // right
-                    // after its death.
-                    Log.d(ACRA.LOG_TAG, "About to create DIALOG from #handleException");
-                    notifyDialog(reportFileName);
+                    // right after its death.
+                    ACRA.log.d(LOG_TAG, "Creating CrashReportDialog for " + reportFileName);
+                    final Intent dialogIntent = createCrashReportDialogIntent(reportFileName, reportBuilder);
+                    dialogIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    mContext.startActivity(dialogIntent);
                 }
 
-                Log.d(LOG_TAG, "Wait for Toast + worker ended. Kill Application ? " + endApplication);
+                ACRA.log.d(LOG_TAG, "Wait for Toast + worker ended. Kill Application ? " + reportBuilder.mEndsApplication);
 
-                if (endApplication) {
-                    endApplication();
+                if (reportBuilder.mEndsApplication) {
+                    endApplication(reportBuilder.mUncaughtExceptionThread, reportBuilder.mException);
                 }
             }
         }.start();
     }
 
     /**
-     * Notify user with a dialog the app has crashed, ask permission to send it.
-     * {@link CrashReportDialog} Activity.
-     * 
-     * @param reportFileName
-     *            Name fo the error report to display in the crash report
-     *            dialog.
+     * Creates an Intent that can be used to create and show a CrashReportDialog.
+     *
+     * @param reportFileName    Name of the error report to display in the crash report dialog.
+     * @param reportBuilder     ReportBuilder containing the details of the crash.
      */
-    void notifyDialog(String reportFileName) {
-        Log.d(LOG_TAG, "Creating Dialog for " + reportFileName);
-        Intent dialogIntent = new Intent(mContext, CrashReportDialog.class);
+    private Intent createCrashReportDialogIntent(String reportFileName, ReportBuilder reportBuilder) {
+        ACRA.log.d(LOG_TAG, "Creating DialogIntent for " + reportFileName + " exception=" + reportBuilder.mException);
+        final Intent dialogIntent = new Intent(mContext, ACRA.getConfig().reportDialogClass());
         dialogIntent.putExtra(ACRAConstants.EXTRA_REPORT_FILE_NAME, reportFileName);
-        dialogIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        mContext.startActivity(dialogIntent);
+        dialogIntent.putExtra(ACRAConstants.EXTRA_REPORT_EXCEPTION, reportBuilder.mException);
+        return dialogIntent;
     }
 
+
     /**
-     * Send a status bar notification.
-     * 
+     * Creates a status bar notification.
+     *
      * The action triggered when the notification is selected is to start the
      * {@link CrashReportDialog} Activity.
-     * 
-     * @param reportFileName
-     *            Name of the report file to send.
+     *
+     * @param reportFileName Name of the report file to send.
      */
-    private void notifySendReport(String reportFileName) {
-        // This notification can't be set to AUTO_CANCEL because after a crash,
-        // clicking on it restarts the application and this triggers a check
-        // for pending reports which issues the notification back.
-        // Notification cancellation is done in the dialog activity displayed
-        // on notification click.
-        final NotificationManager notificationManager = (NotificationManager) mContext
-                .getSystemService(Context.NOTIFICATION_SERVICE);
+    private void createNotification(String reportFileName, ReportBuilder reportBuilder) {
+
+        final NotificationManager notificationManager = (NotificationManager) mContext.getSystemService(Context.NOTIFICATION_SERVICE);
 
         final ReportsCrashes conf = ACRA.getConfig();
 
@@ -851,17 +893,20 @@ public class ErrorReporter implements Thread.UncaughtExceptionHandler {
         final CharSequence contentTitle = mContext.getText(conf.resNotifTitle());
         final CharSequence contentText = mContext.getText(conf.resNotifText());
 
-        final Intent notificationIntent = new Intent(mContext, CrashReportDialog.class);
-        Log.d(LOG_TAG, "Creating Notification for " + reportFileName);
-        notificationIntent.putExtra(ACRAConstants.EXTRA_REPORT_FILE_NAME, reportFileName);
-        final PendingIntent contentIntent = PendingIntent.getActivity(mContext, mNotificationCounter++, notificationIntent, PendingIntent.FLAG_UPDATE_CURRENT);
+        ACRA.log.d(LOG_TAG, "Creating Notification for " + reportFileName);
+        final Intent crashReportDialogIntent = createCrashReportDialogIntent(reportFileName, reportBuilder);
+        final PendingIntent contentIntent = PendingIntent.getActivity(mContext, mNotificationCounter++, crashReportDialogIntent, PendingIntent.FLAG_UPDATE_CURRENT);
 
         notification.setLatestEventInfo(mContext, contentTitle, contentText, contentIntent);
+        notification.flags = notification.flags | Notification.FLAG_AUTO_CANCEL;
 
-        final Intent deleteIntent = new Intent(mContext, CrashReportDialog.class);
+        // The deleteIntent is invoked when the user swipes away the Notification.
+        // In this case we invoke the CrashReportDialog with EXTRA_FORCE_CANCEL==true
+        // which will cause BaseCrashReportDialog to clear the crash report and finish itself.
+        final Intent deleteIntent = createCrashReportDialogIntent(reportFileName, reportBuilder);
         deleteIntent.putExtra(ACRAConstants.EXTRA_FORCE_CANCEL, true);
         notification.deleteIntent = PendingIntent.getActivity(mContext, -1, deleteIntent, 0);
-        
+
         // Send new notification
         notificationManager.notify(ACRAConstants.NOTIF_CRASH_ID, notification);
     }
@@ -872,13 +917,13 @@ public class ErrorReporter implements Thread.UncaughtExceptionHandler {
         final long timestamp = now.toMillis(false);
         final String isSilent = crashData.getProperty(IS_SILENT);
         return "" + timestamp + (isSilent != null ? ACRAConstants.SILENT_SUFFIX : "")
-                + ACRAConstants.REPORTFILE_EXTENSION;
+            + ACRAConstants.REPORTFILE_EXTENSION;
     }
 
     /**
      * When a report can't be sent, it is saved here in a file in the root of
      * the application private directory.
-     * 
+     *
      * @param fileName
      *            In a few rare cases, we write the report again with additional
      *            data (user comment for example). In such cases, you can
@@ -892,40 +937,17 @@ public class ErrorReporter implements Thread.UncaughtExceptionHandler {
      */
     private void saveCrashReportFile(String fileName, CrashReportData crashData) {
         try {
-            Log.d(LOG_TAG, "Writing crash report file " + fileName + ".");
+            ACRA.log.d(LOG_TAG, "Writing crash report file " + fileName + ".");
             final CrashReportPersister persister = new CrashReportPersister(mContext);
             persister.store(crashData, fileName);
         } catch (Exception e) {
-            Log.e(LOG_TAG, "An error occurred while writing the report file...", e);
-        }
-    }
-
-    /**
-     * Retrieve the most recently created "non silent" report from an array of
-     * report file names. A non silent is any report which has not been created
-     * with {@link #handleSilentException(Throwable)}.
-     * 
-     * @param filesList
-     *            An array of report file names.
-     * @return The most recently created "non silent" report file name.
-     */
-    private String getLatestNonSilentReport(String[] filesList) {
-        if (filesList != null && filesList.length > 0) {
-            for (int i = filesList.length - 1; i >= 0; i--) {
-                if (!fileNameParser.isSilent(filesList[i])) {
-                    return filesList[i];
-                }
-            }
-            // We should never have this result, but this should be secure...
-            return filesList[filesList.length - 1];
-        } else {
-            return null;
+            ACRA.log.e(LOG_TAG, "An error occurred while writing the report file...", e);
         }
     }
 
     /**
      * Delete pending reports.
-     * 
+     *
      * @param deleteApprovedReports
      *            Set to true to delete approved and silent reports.
      * @param deleteNonApprovedReports
@@ -934,7 +956,7 @@ public class ErrorReporter implements Thread.UncaughtExceptionHandler {
      *            Number of pending reports to retain.
      */
     private void deletePendingReports(boolean deleteApprovedReports, boolean deleteNonApprovedReports,
-            int nbOfLatestToKeep) {
+                                      int nbOfLatestToKeep) {
         // TODO Check logic and instances where nbOfLatestToKeep = X, because
         // that might stop us from deleting any reports.
         final CrashReportFinder reportFinder = new CrashReportFinder(mContext);
@@ -945,9 +967,9 @@ public class ErrorReporter implements Thread.UncaughtExceptionHandler {
             final boolean isReportApproved = fileNameParser.isApproved(fileName);
             if ((isReportApproved && deleteApprovedReports) || (!isReportApproved && deleteNonApprovedReports)) {
                 final File fileToDelete = new File(mContext.getFilesDir(), fileName);
-                ACRA.log.d(ACRA.LOG_TAG, "Deleting file " + fileName);
+                ACRA.log.d(LOG_TAG, "Deleting file " + fileName);
                 if (!fileToDelete.delete()) {
-                    Log.e(ACRA.LOG_TAG, "Could not delete report : " + fileToDelete);
+                    ACRA.log.e(LOG_TAG, "Could not delete report : " + fileToDelete);
                 }
             }
         }
@@ -956,7 +978,7 @@ public class ErrorReporter implements Thread.UncaughtExceptionHandler {
     /**
      * Checks if an array of reports files names contains only silent or
      * approved reports.
-     * 
+     *
      * @param reportFileNames
      *            Array of report locations to check.
      * @return True if there are only silent or approved reports. False if there
@@ -983,7 +1005,7 @@ public class ErrorReporter implements Thread.UncaughtExceptionHandler {
         // Try to send by mail. If a mailTo address is provided, do not add
         // other senders.
         if (!"".equals(conf.mailTo())) {
-            Log.w(LOG_TAG, mApplication.getPackageName() + " reports will be sent by email (if accepted by user).");
+            ACRA.log.w(LOG_TAG, mApplication.getPackageName() + " reports will be sent by email (if accepted by user).");
             setReportSender(new EmailIntentSender(mApplication));
             return;
         }
@@ -995,11 +1017,11 @@ public class ErrorReporter implements Thread.UncaughtExceptionHandler {
             // does).
             // I think that is a small price to pay to ensure that ACRA doesn't
             // crash if the PackageManager has died.
-            Log.e(LOG_TAG,
-                    mApplication.getPackageName()
-                            + " should be granted permission "
-                            + permission.INTERNET
-                            + " if you want your crash reports to be sent. If you don't want to add this permission to your application you can also enable sending reports by email. If this is your will then provide your email address in @ReportsCrashes(mailTo=\"your.account@domain.com\"");
+            ACRA.log.e(LOG_TAG,
+                  mApplication.getPackageName()
+                      + " should be granted permission "
+                      + permission.INTERNET
+                      + " if you want your crash reports to be sent. If you don't want to add this permission to your application you can also enable sending reports by email. If this is your will then provide your email address in @ReportsCrashes(mailTo=\"your.account@domain.com\"");
             return;
         }
 
@@ -1007,13 +1029,117 @@ public class ErrorReporter implements Thread.UncaughtExceptionHandler {
         // with default mapping.
         if (conf.formUri() != null && !"".equals(conf.formUri())) {
             setReportSender(new HttpSender(ACRA.getConfig().httpMethod(), ACRA.getConfig().reportType(), null));
-            return;
+        }
+    }
+
+    /**
+     * Fluent API used to assemble the different options used for a crash report
+     */
+    public final class ReportBuilder {
+
+        private String mMessage;
+        private Thread mUncaughtExceptionThread;
+        private Throwable mException;
+        private Map<String, String> mCustomData;
+
+        private boolean mForceSilent = false;
+        private boolean mEndsApplication = false;
+
+        /**
+         * Set the error message to be reported.
+         *
+         * @param msg the error message
+         * @return the updated {@code ReportBuilder}
+         */
+        public ReportBuilder message(String msg) {
+            mMessage = msg;
+            return this;
         }
 
-        // The default behavior is to use the formKey for a Google Docs Form. If
-        // a formUri was also provided, we keep its sender.
-        if (conf.formKey() != null && !"".equals(conf.formKey().trim())) {
-            addReportSender(new GoogleFormSender());
+        /**
+         * Sets the Thread on which an uncaught Exception occurred.
+         *
+         * @param thread    Thread on which an uncaught Exception occurred.
+         * @return the updated {@code ReportBuilder}
+         */
+        private ReportBuilder uncaughtExceptionThread(Thread thread) {
+            mUncaughtExceptionThread = thread;
+            return this;
+        }
+
+        /**
+         * Set the stack trace to be reported
+         *
+         * @param e The exception that should be associated with this report
+         * @return the updated {@code ReportBuilder}
+         */
+        public ReportBuilder exception(Throwable e) {
+            mException = e;
+            return this;
+        }
+
+        private void initCustomData() {
+            if (mCustomData ==  null)
+                mCustomData = new HashMap<String, String>();
+        }
+
+        /**
+         * Sets additional values to be added to {@code CUSTOM_DATA}. Values
+         * specified here take precedence over globally specified custom data.
+         *
+         * @param customData a map of custom key-values to be attached to the report
+         * @return the updated {@code ReportBuilder}
+         */
+        @SuppressWarnings("unused")
+        public ReportBuilder customData(Map<String, String> customData) {
+            initCustomData();
+            mCustomData.putAll(customData);
+            return this;
+        }
+
+        /**
+         * Sets an additional value to be added to {@code CUSTOM_DATA}. The value
+         * specified here takes precedence over globally specified custom data.
+         *
+         * @param key the key identifying the custom data
+         * @param value the value for the custom data entry
+         * @return the updated {@code ReportBuilder}
+         */
+        @SuppressWarnings("unused")
+        public ReportBuilder customData(String key, String value) {
+            initCustomData();
+            mCustomData.put(key, value);
+            return this;
+        }
+
+        /**
+         * Forces the report to be sent silently, ignoring the default interaction mode set in the config
+         *
+         * @return the updated {@code ReportBuilder}
+         */
+        public ReportBuilder forceSilent() {
+            mForceSilent = true;
+            return this;
+        }
+
+        /**
+         * Ends the application after sending the crash report
+         *
+         * @return the updated {@code ReportBuilder}
+         */
+        public ReportBuilder endsApplication() {
+            mEndsApplication = true;
+            return this;
+        }
+
+        /**
+         * Assembles and sends the crash report
+         */
+        public void send() {
+            if (mMessage == null && mException == null) {
+                mMessage = "Report requested by developer";
+            }
+            report(this);
         }
     }
 }

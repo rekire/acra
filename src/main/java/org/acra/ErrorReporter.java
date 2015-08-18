@@ -897,7 +897,7 @@ public class ErrorReporter implements Thread.UncaughtExceptionHandler {
         final Intent crashReportDialogIntent = createCrashReportDialogIntent(reportFileName, reportBuilder);
         final PendingIntent contentIntent = PendingIntent.getActivity(mContext, mNotificationCounter++, crashReportDialogIntent, PendingIntent.FLAG_UPDATE_CURRENT);
 
-        notification.setLatestEventInfo(mContext, contentTitle, contentText, contentIntent);
+        //notification.setLatestEventInfo(mContext, contentTitle, contentText, contentIntent);
         notification.flags = notification.flags | Notification.FLAG_AUTO_CANCEL;
 
         // The deleteIntent is invoked when the user swipes away the Notification.

@@ -15,15 +15,17 @@
  */
 package org.acra.sender;
 
-import org.acra.ACRA;
-import org.acra.ACRAConstants;
-import org.acra.collector.CrashReportData;
-import org.acra.ReportField;
-import org.acra.annotation.ReportsCrashes;
-
+import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
+import android.widget.Toast;
+
+import org.acra.ACRA;
+import org.acra.ACRAConstants;
+import org.acra.ReportField;
+import org.acra.annotation.ReportsCrashes;
+import org.acra.collector.CrashReportData;
 
 /**
  * Send reports through an email intent. The user will be asked to chose his
@@ -50,7 +52,11 @@ public class EmailIntentSender implements ReportSender {
         emailIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         emailIntent.putExtra(android.content.Intent.EXTRA_SUBJECT, subject);
         emailIntent.putExtra(android.content.Intent.EXTRA_TEXT, body);
-        mContext.startActivity(emailIntent);
+        try {
+            mContext.startActivity(Intent.createChooser(emailIntent, "Report"));
+        } catch(ActivityNotFoundException e) {
+            Toast.makeText(context, "Wir konnten keine E-Mail App finden. Bitte schreib uns an " + ACRA.getConfig().mailTo(), Toast.LENGTH_LONG).show();
+        }
     }
 
     private String buildBody(CrashReportData errorContent) {
